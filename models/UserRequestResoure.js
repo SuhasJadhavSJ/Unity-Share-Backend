@@ -6,7 +6,7 @@ const userRequestedResourceSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
-  requesterId: {
+  userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
     required: true,
@@ -27,6 +27,11 @@ const userRequestedResourceSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  description: { type: String, required: true },
+  image: [{ type: String }],
 });
 
-module.exports = mongoose.model("UserRequestedResource", userRequestedResourceSchema);
+module.exports = mongoose.model(
+  "UserRequestedResource",
+  userRequestedResourceSchema
+);
