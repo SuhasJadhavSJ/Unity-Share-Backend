@@ -420,6 +420,11 @@ app.get("/request-resource/:resourceId", authenticate, async (req, res) => {
         .json({ message: "You have already requested this resource." });
     }
 
+    resource.requestedBy.push({ userId });
+
+    // Save the updated resource in the database
+    await resource.save();
+
     console.log("userid" + userId);
     // Create the resource request
     const newRequest = new UserRequestedResource({
