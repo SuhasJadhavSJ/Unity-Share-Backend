@@ -16,19 +16,24 @@ const userRequestedResourceSchema = new mongoose.Schema({
     ref: "Donation",
     required: true,
   },
+  
   resourceName: {
     type: String,
     required: true,
   },
-  category: String,
-  description: String,
-  image: String,
+  category:{ 
+    String,},
+
+  description: {String,},
+
+  image: {String,},
   requestDate: {
     type: Date,
     default: Date.now,
   },
   description: { type: String, required: true },
   image: [{ type: String }],
+  
 });
 
 module.exports = mongoose.model(

@@ -12,14 +12,19 @@ const bodyParser = require("body-parser");
 const authenticate = require("./middleware/authenticate"); // Include the authentication middleware
 const RequestedResource = require("./models/RequestedResource"); // Import the requested resource model
 const UserRequestedResource = require("./models/UserRequestResoure");
-const Chat = require("./models/Chat");
-const ContactMessage = require("./models/ContactMessage");
+// const Chat = require("./models/Chat");
+const Contact = require("./models/Contact");
+const UserDonatedResource = require("./models/UserDonatedResource");
+const { Chat, Message } = require('./models/Chat');
+const RequestAccepted = require('./models/RequestAccept');
+const RequestRejected = require('./models/RequestReject');
 
 require("dotenv").config();
 
 const app = express();
 const http = require("http");
 const { Server } = require("socket.io");
+const RequestReject = require("./models/RequestReject");
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -56,6 +61,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // Routes
+
 
 // Chat functionality
 io.on("connection", (socket) => {
@@ -128,21 +134,31 @@ io.on("connection", (socket) => {
   });
 });
 
-// Fetch user's profile data for sidebar
-app.get("/user/profile", authenticate, async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id).select(
-      "name email profilePic"
-    );
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    res.status(200).json({ profile: user });
-  } catch (error) {
-    console.error("Error fetching user profile:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
+
+
+
+
+
+// app.get('/chat/:userId', async (req, res) => {
+//   const userId = req.params.userId;
+//   const currentUserId = req.user._id; // Assuming user is authenticated with JWT and their ID is available
+
+//   try {
+//     // Fetch messages from the database where either sender or receiver is the current user
+//     const messages = await Message.find({
+//       $or: [
+//         { sender: currentUserId, receiver: userId },
+//         { sender: userId, receiver: currentUserId }
+//       ]
+//     });
+
+//     res.json({ messages });
+//   } catch (error) {
+//     console.error('Error fetching messages:', error);
+//     res.status(500).send('Error fetching messages');
+//   }
+// });
+
 
 // POST route for donation
 app.post("/donate", upload.array("images", 5), async (req, res) => {
@@ -178,6 +194,8 @@ app.post("/donate", upload.array("images", 5), async (req, res) => {
   }
 });
 
+
+
 // GET route to fetch all donated resources
 app.get("/donatedResources", async (req, res) => {
   try {
@@ -195,6 +213,8 @@ app.get("/donatedResources", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+
 
 // Login Route
 app.post("/login", async (req, res) => {
@@ -231,6 +251,8 @@ app.post("/login", async (req, res) => {
   }
 });
 
+
+
 // Signup route
 app.post("/signup", async (req, res) => {
   const { name, email, password } = req.body;
@@ -263,19 +285,25 @@ app.post("/signup", async (req, res) => {
   }
 });
 
+
+
 // User Profile Route
 app.get("/profile/:userId", async (req, res) => {
   try {
     const user = await User.findById(req.params.userId); // Fetch user data by ID
     if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Fetch donated resources
     const donate_data = await Donation.find({ userId: req.params.userId });
-    const requested_data = await RequestedResource.find({
-      userId: req.params.userId,
-    });
+
+    // Fetch requested resources and populate resourceId
+    const requested_data = await UserRequestedResource.find({ userId: req.params.userId })
+      .populate('resourceId') // Populate resourceId with full donation data
+      .populate('donorId', 'name') // Optionally populate donor information
+      .populate('userId', 'name'); // Optionally populate user information
 
     res.json({
-      name: user,
+      name: user.name,  // Returning user name
       donatedResources: donate_data || [],
       requestedResources: requested_data || [],
     });
@@ -285,8 +313,51 @@ app.get("/profile/:userId", async (req, res) => {
   }
 });
 
-// PUT route to update user's profile (name, profilePic)
 
+// Route to fetch accepted requests for a user
+app.get('/accepted/:userId', authenticate, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    // Fetch accepted resources by the userId
+    const acceptedResources = await RequestAccepted.find({ requesterId: userId })
+      .populate('resourceId', 'resourceName quantity location category') // Populate the resource details
+      .populate('requesterId', 'name'); // Populate the requester's details
+    
+    if (acceptedResources.length === 0) {
+      return res.status(404).json({ message: 'No accepted requests found.' });
+    }
+    
+    res.status(200).json(acceptedResources);
+  } catch (error) {
+    console.error('Error fetching accepted requests:', error);
+    res.status(500).json({ message: 'Server error.' });
+  }
+});
+
+// Route to fetch rejected requests for a user
+app.get('/rejected/:userId', authenticate, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    // Fetch rejected resources by the userId
+    const rejectedResources = await RequestReject.find({ requesterId: userId })
+      .populate('resourceId', 'resourceName quantity location category') // Populate the resource details
+      .populate('requesterId', 'name'); // Populate the requester's details
+    
+    if (rejectedResources.length === 0) {
+      return res.status(404).json({ message: 'No rejected requests found.' });
+    }
+    
+    res.status(200).json(rejectedResources);
+  } catch (error) {
+    console.error('Error fetching rejected requests:', error);
+    res.status(500).json({ message: 'Server error.' });
+  }
+});
+
+
+// PUT route to update user's profile (name, profilePic)
 app.put(
   "/profile",
   authenticate,
@@ -311,54 +382,129 @@ app.put(
   }
 );
 
-// Route to handle storing requested resources
-app.post("/request-resource", upload.array("images", 5), async (req, res) => {
+
+
+// Route to handle storing requested resources from donation
+// app.post("/request-resource", upload.array("images", 5), async (req, res) => {
+//   try {
+//     console.log("Received Files:", req.files); // Log received files for debugging
+
+//     // Extract data from the request body
+//     const {
+//       resourceName,
+//       quantity,
+//       category,
+//       description,
+//       location,
+//       userId,
+//       customCategory,
+//     } = req.body;
+
+//     // Ensure at least one file is uploaded
+//     if (!req.files || req.files.length === 0) {
+//       return res.status(400).json({ message: "No files uploaded" });
+//     }
+
+//     // Map the file paths for the uploaded images
+//     const imagePaths = req.files.map((file) => `/uploads/${file.filename}`);
+//     console.log("Image Paths:", imagePaths); // Log the paths for debugging
+
+//     // Create a new RequestedResource document
+//     const newRequestedResource = new RequestedResource({
+//       resourceName,
+//       quantity,
+//       category,
+//       customCategory: category === "others" ? customCategory : undefined, // Store custom category if specified
+//       description,
+//       location,
+//       image: imagePaths, // Store the image paths
+//       userId, // Associate with the user who requested the resource
+//     });
+
+//     // Save the new requested resource to the database
+//     await newRequestedResource.save();
+
+//     // Return success response
+//     res.status(201).json({
+//       message: "Request successful",
+//       requestedResource: newRequestedResource,
+//     });
+//   } catch (error) {
+//     console.error("Error in Requesting Resource Route:", error);
+//     res.status(500).json({ message: "Internal server error" });
+//   }
+// });
+
+
+
+// Route to handle storing the donated resource from the requested card
+app.post("/donate-resource/:resourceId",authenticate,async(req,res)=>{
+  
+  const { resourceId } = req.params; // Get resourceId from the URL parameter
+  const { userId } = req.user; // Get the requesterId from the authenticated user
+  
+  // console.log("id" + userId);
   try {
-    console.log("Received Files:", req.files); // Log received files for debugging
+    // Validate that the resource exists
+    const resource = await RequestedResource.findById(resourceId);
+    if (!resource) {
+      return res.status(404).json({ message: "Resource not found." });
+    }
+    console.log(resource);
 
-    // Extract data from the request body
-    const {
-      resourceName,
-      quantity,
-      category,
-      description,
-      location,
-      userId,
-      customCategory,
-    } = req.body;
-
-    // Ensure at least one file is uploaded
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ message: "No files uploaded" });
+    // Prevent users from requesting their own donated resources
+    if (resource.userId.toString() === userId.toString()) {
+      return res
+        .status(403)
+        .json({ message: "You cannot donate your own requested resource." });
     }
 
-    // Map the file paths for the uploaded images
-    const imagePaths = req.files.map((file) => `/uploads/${file.filename}`);
-    console.log("Image Paths:", imagePaths); // Log the paths for debugging
-
-    // Create a new RequestedResource document
-    const newRequestedResource = new RequestedResource({
-      resourceName,
-      quantity,
-      category,
-      customCategory: category === "others" ? customCategory : undefined, // Store custom category if specified
-      description,
-      location,
-      image: imagePaths, // Store the image paths
-      userId, // Associate with the user who requested the resource
+    // Ensure the user hasn't already requested the same resource
+    const existingRequest = await UserDonatedResource.findOne({
+      resourceId: resourceId,
+      userId: userId,
     });
 
-    // Save the new requested resource to the database
-    await newRequestedResource.save();
+    console.log("existing" + existingRequest);
 
-    // Return success response
+    if (existingRequest) {
+      return res
+        .status(400)
+        .json({ message: "You have already donated this resource." });
+    }
+
+     // Initialize requestedBy as an empty array if it's undefined
+     if (!resource.requestedBy) {
+      resource.requestedBy = [];
+    }
+
+    resource.requestedBy.push({ userId });
+
+    // Save the updated resource in the database
+    await resource.save();
+
+    console.log("userid" + userId);
+    // Create the resource request
+    const newRequest = new UserDonatedResource({
+      donorId: resource.userId,  // The user who originally donated the resource
+      requestedResourceId: resourceId,  // Reference to the requested resource
+      resourceName: resource.resourceName,
+      category: resource.category,
+      description: resource.description,
+      image: resource.image,  // Assuming resource.image is an array of image URLs
+    });
+
+    console.log("newRequest" + newRequest);
+
+    await newRequest.save(); // Save the new request to the database
+
     res.status(201).json({
-      message: "Request successful",
-      requestedResource: newRequestedResource,
+      message: "Resource donated submitted successfully.",
+      request: newRequest,
     });
   } catch (error) {
-    console.error("Error in Requesting Resource Route:", error);
-    res.status(500).json({ message: "Internal server error" });
+    console.error("Error during resource request:", error);
+    res.status(500).json({ message: "Internal server error." });
   }
 });
 
@@ -382,6 +528,9 @@ app.get("/requestedResources", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+
+
 
 // Request a resource from donation
 // POST /request-resource/:resourceId
@@ -435,6 +584,7 @@ app.get("/request-resource/:resourceId", authenticate, async (req, res) => {
       category: resource.category,
       description: resource.description,
       image: resource.image,
+      requestDate: new Date(), // Explicitly set the date
     });
 
     console.log("newRequest" + newRequest);
@@ -450,6 +600,8 @@ app.get("/request-resource/:resourceId", authenticate, async (req, res) => {
     res.status(500).json({ message: "Internal server error." });
   }
 });
+
+
 
 // Get all resources requested by the logged-in user
 app.get("/user-requested-resources", authenticate, async (req, res) => {
@@ -471,6 +623,8 @@ app.get("/user-requested-resources", authenticate, async (req, res) => {
   }
 });
 
+
+
 // GET route to fetch all users
 app.get("/users", async (req, res) => {
   try {
@@ -481,6 +635,8 @@ app.get("/users", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+
 
 // DELETE route to remove a donated resource
 app.delete("/donatedResources/:id", async (req, res) => {
@@ -499,6 +655,8 @@ app.delete("/donatedResources/:id", async (req, res) => {
   }
 });
 
+
+
 // DELETE route to remove a user
 app.delete("/users/:id", async (req, res) => {
   try {
@@ -516,34 +674,36 @@ app.delete("/users/:id", async (req, res) => {
   }
 });
 
+
+
 // Route to handle contact form submissions
-app.post("/contact", authenticate, async (req, res) => {
+// Route to handle contact form submission
+app.post("/contact", async (req, res) => {
   const { name, email, subject, message } = req.body;
-  const userId = req.user._id;
-
+  
   try {
-    if (!name || !email || !subject || !message) {
-      return res.status(400).json({ message: "All fields are required." });
-    }
+    // Save the contact details to the database
+    const newContact = new Contact({ name, email, subject, message });
+    await newContact.save();
 
-    const newContactMessage = new ContactMessage({
-      userId,
-      name,
-      email,
-      subject,
-      message,
-    });
-
-    await newContactMessage.save();
-
-    res
-      .status(201)
-      .json({ message: "Your message has been submitted successfully." });
+    // Send success response
+    res.status(200).json({ message: "Your message has been sent successfully!" });
   } catch (error) {
-    console.error("Error submitting contact message:", error);
-    res.status(500).json({ message: "Internal server error." });
+    res.status(500).json({ message: "There was an error processing your request." });
   }
 });
+
+
+// Endpoint to get all contact form submissions
+app.get("/contact", async (req, res) => {
+  try {
+    const contacts = await Contact.find(); // Fetch all contact form submissions
+    res.status(200).json(contacts);
+  } catch (error) {
+    res.status(500).json({ message: "There was an error fetching contact data." });
+  }
+});
+
 
 // Update user's profile (name, profilePic)
 app.put(
@@ -572,6 +732,402 @@ app.put(
     }
   }
 );
+
+
+
+// Cart route to fetch requested resources for the logged-in user
+// app.get("/cart", async (req, res) => {
+//   try {
+//     // You can hard-code the userId for testing, or fetch it from the session or query parameters
+//     const userId = req.query.userId || "some-user-id"; // Replace this with dynamic logic
+
+//     // Fetch requested resources for the user
+//     const cartItems = await UserRequestedResource.find({ userId })
+//       .populate({
+//         path: "donorId",
+//         select: "name location", // Fetch donor's name and location
+//       })
+//       .populate({
+//         path: "resourceId",
+//         select: "createdAt", // Fetch resource creation date
+//       });
+
+//     // Transforming data to return specific fields
+//     const formattedCart = cartItems.map((item) => ({
+//       resourceName: item.resourceName,
+//       image: item.image,
+//       donorName: item.donorId.name || "Unknown Donor",
+//       location: item.donorId.location || "Unknown Location",
+//       requestDate: item.resourceId.createdAt || item.requestDate,
+//     }));
+
+//     res.status(200).json({ success: true, cart: formattedCart });
+//   } catch (error) {
+//     console.error("Error fetching cart data:", error);
+//     res.status(500).json({ success: false, message: "Failed to fetch cart data" });
+//   }
+// });
+
+
+
+// Backend route for cart
+app.get("/cart", async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'User ID is required' });
+    }
+
+    // Fetch the cart items and populate the donorId field with the donor's name
+    const cartItems = await UserRequestedResource.find({ userId })
+      .populate({
+        path: 'donorId', // Field to populate
+        select: 'name', // Specify which fields of the User model you want to include
+      })
+      .exec();
+
+    // Check if cartItems is empty
+    if (cartItems.length === 0) {
+      return res.status(404).json({ success: false, message: 'No cart items found' });
+    }
+
+    // Send the cart items with donor names
+    const formattedCartItems = cartItems.map(item => ({
+      ...item.toObject(),
+      donorName: item.donorId.name, // Add donorName to each item
+    }));
+
+    res.json({
+      success: true,
+      cart: formattedCartItems, // Send formatted cart items
+    });
+  } catch (error) {
+    console.error('Error fetching cart items:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+
+// Endpoint to get requesters for a donated resource
+app.get('/resources/requesters/:resourceId', async (req, res) => {
+  const { resourceId } = req.params;
+
+  try {
+    // Fetch all UserRequestedResource documents that reference the given resourceId
+    const requestedResources = await UserRequestedResource.find({ resourceId })
+      .populate('userId', 'name') // Populate user information (name)
+      .exec();
+
+    // Extract the requesters and send them as the response
+    const requesters = requestedResources.map((request) => ({
+      _id: request.userId._id,
+      name: request.userId.name,
+    }));
+
+    res.status(200).json({ requesters });
+  } catch (error) {
+    console.error("Error fetching requesters:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+
+// Route to fetch donors for requested resources
+app.get("/resources/donors/:userId", async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    // Find all resources requested by the user
+    const requestedResources = await UserRequestedResource.find({ userId });
+
+    // Fetch the donors and donation date for each requested resource
+    const donors = await Promise.all(
+      requestedResources.map(async (resource) => {
+        const donation = await Donation.findById(resource.resourceId)
+          .populate("userId", "name")
+          .lean(); // Use `lean` for plain JS objects
+
+        return {
+          resourceName: resource.resourceName,
+          donors: donation
+            ? [
+                {
+                  name: donation.userId.name,
+                  _id: donation.userId._id,
+                  donatedAt: donation.createdAt, // Include the donation date
+                },
+              ]
+            : [],
+        };
+      })
+    );
+
+    res.status(200).json(donors);
+  } catch (error) {
+    console.error("Error fetching donors for requested resources:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// Accept a request
+// Accept Resource Request
+app.post('/accept-request/:resourceId', authenticate, async (req, res) => {
+  const { resourceId } = req.params;
+  const { requesterId } = req.body;
+
+  try {
+      const resourceAccepted = new RequestAccepted({
+          resourceId,
+          requesterId,
+          acceptedAt: new Date(),
+      });
+
+      await resourceAccepted.save();
+      res.status(200).json({ message: 'Request accepted successfully' });
+  } catch (error) {
+      console.error('Error accepting resource:', error);
+      res.status(500).json({ error: 'Failed to accept the request' });
+  }
+});
+
+
+
+app.post('/reject-request/:resourceId', authenticate, async (req, res) => {
+  const { resourceId } = req.params;
+  const { requesterId } = req.body;
+
+  try {
+      const resourceRejected = new RequestRejected({
+          resourceId,
+          requesterId,
+          rejectedAt: new Date(),
+      });
+
+      await resourceRejected.save();
+      res.status(200).json({ message: 'Request rejected successfully' });
+  } catch (error) {
+      console.error('Error rejecting resource:', error);
+      res.status(500).json({ error: 'Failed to reject the request' });
+  }
+});
+
+
+
+
+// Remove the resource in the cart
+app.delete("/cart/remove/:id",authenticate, async (req, res) => {
+  try {
+    const cartItemId = req.params.id;
+    const { userId } = req.body; // Get userId from the body
+
+    if (!cartItemId || !userId) {
+      return res.status(400).json({ success: false, message: "Missing item or user ID" });
+    }
+
+    // Find and remove the cart item if it matches the userId
+    const result = await UserRequestedResource.findOneAndDelete({ _id: cartItemId, userId });
+
+    if (!result) {
+      return res.status(404).json({ success: false, message: "Cart item not found or does not belong to user" });
+    }
+
+    res.status(200).json({ success: true, message: "Item removed successfully" });
+  } catch (error) {
+    console.error("Error removing item from cart:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
+
+// Chatting :
+// Route to initiate a chat between two users
+// app.post('/chat/initiate', async (req, res) => {
+//   const { userId, recipientId } = req.body;
+  
+//   try {
+//     const existingChat = await Chat.findOne({ users: { $all: [userId, recipientId] } });
+    
+//     if (existingChat) {
+//       return res.json({ chatId: existingChat._id });
+//     }
+
+//     const newChat = new Chat({
+//       users: [userId, recipientId],
+//       messages: [],
+//     });
+    
+//     await newChat.save();
+//     res.json({ chatId: newChat._id });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).send('Error starting chat');
+//   }
+// });
+
+// // Save messages in the chat
+// app.post('/chat/message', async (req, res) => {
+//   const { chatId, senderId, text } = req.body;
+  
+//   try {
+//     const chat = await Chat.findById(chatId);
+    
+//     if (!chat) {
+//       return res.status(404).send('Chat not found');
+//     }
+
+//     chat.messages.push({
+//       sender: senderId,
+//       text,
+//     });
+    
+//     await chat.save();
+//     res.status(200).send('Message sent');
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).send('Error saving message');
+//   }
+// });
+
+// app.get('/chat/:chatId', async (req, res) => {
+//   const { chatId } = req.params;
+  
+//   try {
+//     const chat = await Chat.findById(chatId).populate('messages.sender', 'name');
+    
+//     if (!chat) {
+//       return res.status(404).send('Chat not found');
+//     }
+    
+//     res.json(chat);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).send('Error fetching chat');
+//   }
+// });
+
+// // GET /chats - Fetch chats that involve the logged-in user
+// app.get('/chats', async (req, res) => {
+//   const userId = req.user.id; // Get user ID from token
+  
+//   try {
+//     const chats = await Chat.find({ users: userId }).populate('users', 'name');
+//     res.json(chats);
+//   } catch (error) {
+//     console.error('Error fetching chats:', error);
+//     res.status(500).send('Error fetching chats');
+//   }
+// });
+
+
+// Initiate a chat between users
+app.post('/initiate', async (req, res) => {
+  const { userId, recipientId } = req.body;
+  try {
+    const chat = new Chat({
+      participants: [userId, recipientId],
+      messages: [],
+    });
+    await chat.save();
+    res.status(201).json({ chatId: chat._id });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to initiate chat' });
+  }
+});
+
+// Send a message in a chat
+app.post('/send', async (req, res) => {
+  const { chatId, userId, message } = req.body;
+  try {
+    const chat = await Chat.findById(chatId);
+    const newMessage = new Message({
+      sender: userId,
+      text: message,
+    });
+    chat.messages.push(newMessage);
+    await chat.save();
+    res.status(200).send('Message sent');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// Fetch chat messages
+app.get('/:chatId', async (req, res) => {
+  try {
+    const chat = await Chat.findById(req.params.chatId).populate('messages.sender', 'name');
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+    res.status(200).json({
+      recipientName: chat.participants.find((id) => id !== req.userId), // Find recipient's name
+      messages: chat.messages,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch chat' });
+  }
+});
+
+// Fetch chat history
+app.get('/history/:userId', async (req, res) => {
+  try {
+    const chats = await Chat.find({ participants: req.params.userId })
+      .populate('participants', 'name')
+      .populate('messages', 'text sender timestamp')
+      .sort({ 'messages.timestamp': -1 })
+      .limit(5); // Limit to last 5 chats
+    res.status(200).json(
+      chats.map((chat) => ({
+        chatId: chat._id,
+        recipientName: chat.participants.find((p) => p._id.toString() !== req.params.userId).name,
+        lastMessage: chat.messages[chat.messages.length - 1]?.text || 'No messages',
+      }))
+    );
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch chat history' });
+  }
+});
+
+
+// GET /chats/:chatId/messages - Fetch all messages for a specific chat
+app.get('/chats/:chatId/messages', async (req, res) => {
+  const { chatId } = req.params;
+  
+  try {
+    const messages = await Message.find({ chatId }).populate('senderId', 'name');
+    res.json(messages);
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).send('Error fetching messages');
+  }
+});
+
+// POST /chats/:chatId/messages - Send a new message in a chat
+app.post('/chats/:chatId/messages', async (req, res) => {
+  const { chatId } = req.params;
+  const { text, senderId } = req.body;
+
+  try {
+    const newMessage = new Message({
+      chatId,
+      text,
+      senderId,
+      sentAt: new Date(),
+    });
+
+    await newMessage.save();
+    res.status(201).json(newMessage);
+  } catch (error) {
+    console.error('Error sending message:', error);
+    res.status(500).send('Error sending message');
+  }
+});
+
+
+
+
 
 const PORT = process.env.PORT || 5000;
 
